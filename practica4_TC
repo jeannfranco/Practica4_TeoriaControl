@@ -1,0 +1,115 @@
+// PIDController.h
+#ifndef PIDCONTROLLER_H
+#define PIDCONTROLLER_H
+
+#include <Arduino.h>
+
+class PIDController {
+public:
+  // Constructor: set sampling time dt (seconds)
+  PIDController(float Kp, float Ki, float Kd, float dt, uint16_t N = 5);
+  // Set tuning parameters
+  void setTunings(float Kp, float Ki, float Kd);
+  // Set filter constant N (higher = less filtering)
+  void setFilter(uint16_t N);
+  // Compute control output, call every dt seconds
+  float compute(float setpoint, float measured);
+  // Reset internal state (errors, integrals, filters)
+  void reset(float initialOutput = 0);
+
+private:
+  // Tuning parameters
+  float Kp, Ki, Kd;
+  float dt;          // Sampling interval
+
+  // Difference equation coefficients
+  float A0, A1, A2;        // PI part
+  float A0d, A1d, A2d;     // D part
+
+  // Filter coefficients
+  float alpha1, alpha2;
+  uint16_t N;
+
+  // Error history
+  float e[3];
+  // Output accumulator for PI incremental form
+  float out;
+
+  // Derivative filter history
+  float d[2];   // raw derivative history
+  float fd[2];  // filtered derivative history
+
+  // (Re)compute coefficients after tuning/filter change
+  void computeCoefficients();
+};
+
+#endif // PIDCONTROLLER_H
+
+// PIDController.cpp
+#include "PIDController.h"
+
+PIDController::PIDController(float Kp_, float Ki_, float Kd_, float dt_, uint16_t N_)
+  : Kp(Kp_), Ki(Ki_), Kd(Kd_), dt(dt_), N(N_) {
+  reset();
+  computeCoefficients();
+}
+
+void PIDController::setTunings(float Kp_, float Ki_, float Kd_) {
+  Kp = Kp_; Ki = Ki_; Kd = Kd_;
+  computeCoefficients();
+}
+
+void PIDController::setFilter(uint16_t N_) {
+  N = N_;
+  computeCoefficients();
+}
+
+void PIDController::reset(float initialOutput) {
+  // Clear error history and integrator and derivative filters
+  e[0] = e[1] = e[2] = 0.0f;
+  d[0] = d[1] = 0.0f;
+  fd[0] = fd[1] = 0.0f;
+  out = initialOutput;
+}
+
+void PIDController::computeCoefficients() {
+  // PI incremental form coefficients
+  A0 = Ki * dt + Kp;
+  A1 = -Kp;
+  A2 = 0; // incremental PI, only current and previous
+
+  // Derivative part (difference form)
+  A0d =  Kd / dt;
+  A1d = -2.0f * Kd / dt;
+  A2d =  Kd / dt;
+
+  // Low-pass filter for derivative
+  float tau = Kd / (Kp * N);
+  float alpha = dt / (2.0f * tau);
+  alpha1 = alpha / (alpha + 1.0f);
+  alpha2 = (alpha - 1.0f) / (alpha + 1.0f);
+}
+
+float PIDController::compute(float setpoint, float measured) {
+  // Shift error history
+  e[2] = e[1];
+  e[1] = e[0];
+  // Current error
+  e[0] = setpoint - measured;
+
+  // PI part (incremental)
+  out += A0 * e[0] + A1 * e[1];
+
+  // Raw derivative (difference)
+  d[1] = d[0];
+  d[0] = A0d * e[0] + A1d * e[1] + A2d * e[2];
+
+  // Low-pass filter on derivative
+  fd[1] = fd[0];
+  fd[0] = alpha1 * (d[0] + d[1]) - alpha2 * fd[1];
+
+  // Add filtered derivative
+  out += fd[0];
+
+  return out;
+}
